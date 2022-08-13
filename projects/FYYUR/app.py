@@ -17,6 +17,8 @@ from flask_migrate import Migrate
 from datetime import datetime
 import re
 from operator import itemgetter
+
+from models import Venue, Artist, Show, Genre, db
 #----------------------------------------------------------------------------#
 # App Config.
 #----------------------------------------------------------------------------#
@@ -32,79 +34,6 @@ migrate = Migrate(app, db)
 #----------------------------------------------------------------------------#
 # Models.
 #----------------------------------------------------------------------------#
-class Genre(db.Model):
-    __tablename__ = 'Genre'
-
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String)
-
-
-artist_genre_table = db.Table('artist_genre_table',
-    db.Column('genre_id', db.Integer, db.ForeignKey('Genre.id'), primary_key=True),
-    db.Column('artist_id', db.Integer, db.ForeignKey('Artist.id'), primary_key=True)
-)
-
-venue_genre_table = db.Table('venue_genre_table',
-    db.Column('genre_id', db.Integer, db.ForeignKey('Genre.id'), primary_key=True),
-    db.Column('venue_id', db.Integer, db.ForeignKey('Venue.id'), primary_key=True)
-)
-class Venue(db.Model):
-    __tablename__ = 'Venue'
-
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String)
-    city = db.Column(db.String(120))
-    state = db.Column(db.String(120))
-    address = db.Column(db.String(120))
-    phone = db.Column(db.String(120))
-    image_link = db.Column(db.String(500))
-    facebook_link = db.Column(db.String(120))
-
-    # TODO: implement any missing fields, as a database migration using Flask-Migrate
-    genres = db.relationship('Genre', secondary=venue_genre_table, backref=db.backref('venues'))
-    website_link = db.Column(db.String(140))
-    seeking_talent = db.Column(db.Boolean, default=False)
-    seeking_description = db.Column(db.String(140))
-    shows = db.relationship('Show', backref='venue', lazy=True) 
-
-
-    def __repr__(self):
-        return f'<Venue {self.id} {self.name}>'
-
-class Artist(db.Model):
-    __tablename__ = 'Artist'
-
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String)
-    city = db.Column(db.String(120))
-    state = db.Column(db.String(120))
-    phone = db.Column(db.String(120))
-    genres = db.Column(db.String(120))
-    image_link = db.Column(db.String(500))
-    facebook_link = db.Column(db.String(120))
-   
-    genres = db.relationship('Genre', secondary=artist_genre_table, backref=db.backref('artists'))
-    website_link = db.Column(db.String(140))
-    seeking_venue = db.Column(db.Boolean, default=False)
-    seeking_description = db.Column(db.String(140))
-
-    shows = db.relationship('Show', backref='artist', lazy=True)
-
-    def __repr__(self):
-        return f'<Artist {self.id} {self.name}>'
-    
-  
-class Show(db.Model):
-    __tablename__ = 'Show'
-
-    id = db.Column(db.Integer, primary_key=True)
-    venue_id = db.Column(db.Integer, db.ForeignKey('Venue.id'), nullable=False)
-    artist_id = db.Column(db.Integer, db.ForeignKey('Artist.id'), nullable=False)
-    start_time = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-
-    def __repr__(self):
-        return f'<Show {self.id} {self.venue_id} {self.artist_id} {self.start_time}>'
-
 #----------------------------------------------------------------------------#
 # Filters.
 #----------------------------------------------------------------------------#
@@ -254,24 +183,92 @@ def create_venue_form():
 
 @app.route('/venues/create', methods=['POST'])
 def create_venue_submission():
-  # TODO: insert form data as a new Venue record in the db, instead
-  # TODO: modify data to be the data object returned from db insertion
+    form = VenueForm()
 
-  # on successful db insert, flash success
-  flash('Venue ' + request.form['name'] + ' was successfully listed!')
-  # TODO: on unsuccessful db insert, flash an error instead.
-  # e.g., flash('An error occurred. Venue ' + data.name + ' could not be listed.')
-  # see: http://flask.pocoo.org/docs/1.0/patterns/flashing/
-  return render_template('pages/home.html')
+    name = form.name.data.strip()
+    city = form.city.data.strip()
+    state = form.state.data
+    address = form.address.data.strip()
+    phone = form.phone.data
+    phone = re.sub('\D', '', phone) 
+    genres = form.genres.data               
+    seeking_talent = True if form.seeking_talent.data == 'Yes' else False
+    seeking_description = form.seeking_description.data.strip()
+    image_link = form.image_link.data.strip()
+    website_link = form.website.data.strip()
+    facebook_link = form.facebook_link.data.strip()
+
+    if not form.validate():
+        flash( form.errors )
+        return redirect(url_for('create_venue_submission'))
+
+    else:
+        error_in_insert = False
+        try: # insert venue into DB
+            new_venue = Venue(name=name, city=city, state=state, address=address, phone=phone, \
+                seeking_talent=seeking_talent, seeking_description=seeking_description, image_link=image_link, \
+                website_link=website_link, facebook_link=facebook_link)
+            
+            for genre in genres:
+                fetch_genre = Genre.query.filter_by(name=genre).one_or_none()  
+                if fetch_genre:
+                    new_venue.genres.append(fetch_genre)
+
+                else:
+                    new_genre = Genre(name=genre)
+                    db.session.add(new_genre)
+                    new_venue.genres.append(new_genre) 
+
+            db.session.add(new_venue)
+            db.session.commit()
+        except Exception as e:
+            error_in_insert = True
+            print(f'Exception "{e}" in create_venue_submission()')
+            db.session.rollback()
+        finally:
+            db.session.close()
+
+        if not error_in_insert:
+            flash('Venue ' + request.form['name'] + ' was successfully listed!')
+            return redirect(url_for('index'))
+        else:
+            flash('An error occurred. Venue ' + name + ' could not be listed.')
+            #print("Error in create_venue_submission()")
+            abort(500)
 
 @app.route('/venues/<venue_id>', methods=['DELETE'])
-def delete_venue(venue_id):
   # TODO: Complete this endpoint for taking a venue_id, and using
   # SQLAlchemy ORM to delete a record. Handle cases where the session commit could fail.
 
   # BONUS CHALLENGE: Implement a button to delete a Venue on a Venue Page, have it so that
   # clicking that button delete it from the db then redirect the user to the homepage
-  return None
+ 
+def delete_venue(venue_id):
+    venue = Venue.query.get(venue_id)
+    if not venue:
+        return redirect(url_for('index'))
+    else:
+        error_on_delete = False
+        venue_name = venue.name
+        try:
+            db.session.delete(venue)
+            db.session.commit()
+        except:
+            error_on_delete = True
+            db.session.rollback()
+        finally:
+            db.session.close()
+        if error_on_delete:
+            flash(f'An error occurred deleting venue {venue_name}.')
+           # print("Error in delete_venue()")
+            abort(500)
+        else:
+            # flash(f'Successfully removed venue {venue_name}')
+            # return redirect(url_for('venues'))
+            return jsonify({
+                'deleted': True,
+                'url': url_for('venues')
+            }) 
 
 #  Artists
 #  ----------------------------------------------------------------
